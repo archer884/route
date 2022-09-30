@@ -5,11 +5,12 @@ use std::{
     ops::Not,
     process::{self, Command},
     str::FromStr,
-    time::Duration,
 };
 
+use chrono::Duration;
 use clap::Parser;
 use serde::Serialize;
+use serde_with::{self, serde_as};
 
 static EDITOR: &str = "hx";
 
@@ -27,7 +28,7 @@ struct ElapsedTime {
 
 impl ElapsedTime {
     fn into_duration(self) -> Duration {
-        Duration::from_secs((self.hours * 60 * 60 + self.minutes * 60) as u64)
+        Duration::hours(self.hours as i64) + Duration::minutes(self.minutes as i64)
     }
 }
 
@@ -80,9 +81,11 @@ struct Args {
     notes: Option<String>,
 }
 
+#[serde_as]
 #[derive(Clone, Debug, Serialize)]
 struct WriteFlight<'a> {
     waypoints: Vec<&'a str>,
+    #[serde_as(as = "serde_with::DurationSeconds<i64>")]
     elapsed: Duration,
     notes: Option<Cow<'a, str>>,
 }
@@ -109,7 +112,11 @@ fn run(args: &Args) -> io::Result<()> {
         notes: notes.is_empty().not().then_some(notes),
     };
 
-    dbg!(flight);
+    // FIXME: As demonstrated below, the program can make a Flight model now. Unfortunately,
+    // it has no way of logging them as yet, so... keep at it!
+
+    let data = serde_json::to_string(&flight).unwrap();
+    println!("{data}");
 
     Ok(())
 }
@@ -133,6 +140,11 @@ fn strip_comments(notes: String) -> String {
             buf.push_str(line);
             buf.push('\n');
         }
+    }
+
+    // If it sucks but it works, it... still sucks.
+    if buf.ends_with('\n') {
+        buf.truncate(buf.len() - 1);
     }
 
     buf
