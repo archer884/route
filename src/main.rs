@@ -1,14 +1,34 @@
-use core::fmt;
-use std::{num::ParseIntError, str::FromStr};
+use std::{
+    borrow::Cow,
+    env, fmt, fs, io, iter,
+    num::ParseIntError,
+    ops::Not,
+    process::{self, Command},
+    str::FromStr,
+    time::Duration,
+};
 
 use clap::Parser;
+use serde::Serialize;
 
 static EDITOR: &str = "hx";
+
+#[derive(Debug, thiserror::Error)]
+enum ParseElapsedTimeError {
+    #[error(transparent)]
+    Num(#[from] ParseIntError),
+}
 
 #[derive(Clone, Copy, Debug)]
 struct ElapsedTime {
     hours: i32,
     minutes: i32,
+}
+
+impl ElapsedTime {
+    fn into_duration(self) -> Duration {
+        Duration::from_secs((self.hours * 60 * 60 + self.minutes * 60) as u64)
+    }
 }
 
 impl fmt::Display for ElapsedTime {
@@ -36,33 +56,84 @@ impl FromStr for ElapsedTime {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-enum ParseElapsedTimeError {
-    #[error(transparent)]
-    Num(#[from] ParseIntError),
-}
-
 #[derive(Clone, Debug, Parser)]
 struct Args {
     origin: String,
 
     /// waypoints
-    /// 
+    ///
     /// A collection of waypoints other than your point of origin. These should appear in order
     /// and the final waypoint should be your destination.
     #[arg(required(true))]
     waypoints: Vec<String>,
 
     /// elapsed time
-    /// 
+    ///
     /// Expressed in minutes or hours+minutes ("123" or "2+03")
     elapsed: ElapsedTime,
+
+    /// notes on the flight
+    ///
+    /// If this field is left empty, an editor window will open and the user may save a comment
+    /// there.
+    #[arg(short, long)]
+    notes: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct WriteFlight<'a> {
+    waypoints: Vec<&'a str>,
+    elapsed: Duration,
+    notes: Option<Cow<'a, str>>,
 }
 
 fn main() {
-    run(&Args::parse());
+    if let Err(e) = run(&Args::parse()) {
+        eprintln!("{e}");
+        process::exit(1);
+    }
 }
 
-fn run(args: &Args) {
-    todo!()
+fn run(args: &Args) -> io::Result<()> {
+    let notes = args
+        .notes
+        .as_deref()
+        .map(|message| Ok(Cow::Borrowed(message)))
+        .unwrap_or_else(|| read_from_file().map(Cow::Owned))?;
+
+    let flight = WriteFlight {
+        waypoints: iter::once(&*args.origin)
+            .chain(args.waypoints.iter().map(|wpt| wpt.as_ref()))
+            .collect(),
+        elapsed: args.elapsed.into_duration(),
+        notes: notes.is_empty().not().then_some(notes),
+    };
+
+    dbg!(flight);
+
+    Ok(())
+}
+
+fn read_from_file() -> io::Result<String> {
+    static HELP_MESSAGE: &str = include_str!("../resource/help_message.txt");
+
+    let path = env::temp_dir().join("EDIT_COMMENT");
+
+    fs::write(&path, HELP_MESSAGE)?;
+    Command::new(EDITOR).arg(&path).status()?;
+
+    fs::read_to_string(&path).map(strip_comments)
+}
+
+fn strip_comments(notes: String) -> String {
+    let mut buf = String::with_capacity(notes.len());
+
+    for line in notes.lines() {
+        if !line.starts_with('#') {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+
+    buf
 }
