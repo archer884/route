@@ -1,3 +1,4 @@
 
 # Add your flight notes here. Lines beginning with # are comments and will be
-# ignored. An empty comment will not be stored in the database.
+# ignored. An empty note will not be stored in the database, but your flight
+# will still be saved.

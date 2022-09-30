@@ -1,14 +1,19 @@
 use std::{
     borrow::Cow,
-    env, fmt, fs, io, iter,
+    env, fmt,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    iter,
     num::ParseIntError,
     ops::Not,
+    path::PathBuf,
     process::{self, Command},
     str::FromStr,
 };
 
 use chrono::Duration;
 use clap::Parser;
+use directories::ProjectDirs;
 use serde::Serialize;
 use serde_with::{self, serde_as};
 
@@ -75,7 +80,7 @@ struct Args {
 
     /// notes on the flight
     ///
-    /// If this field is left empty, an editor window will open and the user may save a comment
+    /// If this field is left empty, an editor window will open and the user may save a note
     /// there.
     #[arg(short, long)]
     notes: Option<String>,
@@ -85,8 +90,11 @@ struct Args {
 #[derive(Clone, Debug, Serialize)]
 struct WriteFlight<'a> {
     waypoints: Vec<&'a str>,
+
     #[serde_as(as = "serde_with::DurationSeconds<i64>")]
     elapsed: Duration,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     notes: Option<Cow<'a, str>>,
 }
 
@@ -98,6 +106,9 @@ fn main() {
 }
 
 fn run(args: &Args) -> io::Result<()> {
+    // First off, we need to construct a writable flight model. We don't have a readable one just
+    // yet, but that's... fine. I think. Whatever.
+
     let notes = args
         .notes
         .as_deref()
@@ -112,19 +123,23 @@ fn run(args: &Args) -> io::Result<()> {
         notes: notes.is_empty().not().then_some(notes),
     };
 
-    // FIXME: As demonstrated below, the program can make a Flight model now. Unfortunately,
-    // it has no way of logging them as yet, so... keep at it!
+    // Next, we need to store the flight model in a database. I use the term loosely. At present,
+    // the database will be line-delimited json.
 
     let data = serde_json::to_string(&flight).unwrap();
-    println!("{data}");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(&get_file_path()?)?;
 
-    Ok(())
+    Ok(writeln!(file, "{data}")?)
 }
 
 fn read_from_file() -> io::Result<String> {
     static HELP_MESSAGE: &str = include_str!("../resource/help_message.txt");
 
-    let path = env::temp_dir().join("EDIT_COMMENT");
+    let path = env::temp_dir().join("EDIT_NOTE");
 
     fs::write(&path, HELP_MESSAGE)?;
     Command::new(EDITOR).arg(&path).status()?;
@@ -148,4 +163,15 @@ fn strip_comments(notes: String) -> String {
     }
 
     buf
+}
+
+fn get_file_path() -> io::Result<PathBuf> {
+    let dirs = ProjectDirs::from("", "Hack Commons", "route").unwrap();
+    let dir = dirs.data_dir();
+
+    if !dir.exists() {
+        fs::create_dir_all(dir)?;
+    }
+
+    Ok(dir.join("db.json"))
 }
