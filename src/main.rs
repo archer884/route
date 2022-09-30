@@ -5,13 +5,12 @@ use std::{
     io::{self, Write},
     iter,
     num::ParseIntError,
-    ops::Not,
     path::PathBuf,
     process::{self, Command},
     str::FromStr,
 };
 
-use chrono::Duration;
+use chrono::{Duration, DateTime, Utc};
 use clap::Parser;
 use directories::ProjectDirs;
 use serde::Serialize;
@@ -88,14 +87,31 @@ struct Args {
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize)]
-struct WriteFlight<'a> {
-    waypoints: Vec<&'a str>,
-
+struct Flight {
+    created: DateTime<Utc>,
+    waypoints: Vec<String>,
     #[serde_as(as = "serde_with::DurationSeconds<i64>")]
     elapsed: Duration,
-
     #[serde(skip_serializing_if = "Option::is_none")]
-    notes: Option<Cow<'a, str>>,
+    notes: Option<String>,
+}
+
+impl Flight {
+    fn new<T: AsRef<str>>(origin: impl AsRef<str>, waypoints: impl IntoIterator<Item = T>, elapsed: ElapsedTime) -> Self {
+        let waypoints = iter::once(origin.as_ref().to_ascii_uppercase())
+            .chain(waypoints.into_iter().map(|wpt| wpt.as_ref().to_ascii_uppercase()));
+
+        Self {
+            created: Utc::now(),
+            waypoints: waypoints.collect(),
+            elapsed: elapsed.into_duration(),
+            notes: None,
+        }
+    }
+
+    fn add_notes(&mut self, notes: impl Into<String>) {
+        self.notes = Some(notes.into())
+    }
 }
 
 fn main() {
@@ -115,14 +131,12 @@ fn run(args: &Args) -> io::Result<()> {
         .map(|message| Ok(Cow::Borrowed(message)))
         .unwrap_or_else(|| read_from_file().map(Cow::Owned))?;
 
-    let flight = WriteFlight {
-        waypoints: iter::once(&*args.origin)
-            .chain(args.waypoints.iter().map(|wpt| wpt.as_ref()))
-            .collect(),
-        elapsed: args.elapsed.into_duration(),
-        notes: notes.is_empty().not().then_some(notes),
-    };
+    let mut flight = Flight::new(&args.origin, &args.waypoints, args.elapsed);
 
+    if !notes.is_empty() {
+        flight.add_notes(notes);
+    }
+    
     // Next, we need to store the flight model in a database. I use the term loosely. At present,
     // the database will be line-delimited json.
 
